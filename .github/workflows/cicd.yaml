@@ -42,7 +42,7 @@ jobs:
           curl -sSL -o argocd \
           https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x argocd
-          argocd version
+          ./argocd version
 
       - name: Login to ArgoCD
         run: |
