@@ -18,11 +18,11 @@ jobs:
       - name: Shorten commit id
         shell: bash
         run: |
-          echo "COMMIT_ID=${GITHUB_SHA::6})">> $GITHUB_ENV
+          echo "COMMIT_ID=${GITHUB_SHA::6})" >> $GITHUB_ENV
 
       - name: Debug commit id 
         run: |
-          echo "COMMIT_ID is {{$ env.COMMIT_ID}}
+          echo "COMMIT_ID is {{$ env.COMMIT_ID}}"
 
       -
         name: Login to Docker Hub
