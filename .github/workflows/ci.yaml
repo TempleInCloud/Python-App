@@ -22,7 +22,7 @@ jobs:
 
       - name: Debug commit id 
         run: |
-          echo "COMMIT_ID is $COMMIT_ID"
+          echo "COMMIT_ID is {{$ env.COMMIT_ID}}
 
       -
         name: Login to Docker Hub
