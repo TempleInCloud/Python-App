@@ -39,15 +39,14 @@ jobs:
     steps:
       - name: Install ArgoCD CLI
         run: |
-          curl -ksSL -o argocd \
+          curl -sSL -o argocd \
           https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x argocd
-          mv argocd /usr/local/bin/
           argocd version
 
       - name: Login to ArgoCD
         run: |
-          argocd login argocd-server.aargocd \
+          ./argocd login argocd-server.aargocd \
           --insecure \
           --grpc-web \
           --username admin \
@@ -55,5 +54,5 @@ jobs:
 
       - name: Sync application
         run: |
-          argocd app sync python-app
+          ./argocd app sync python-app
           
