@@ -14,7 +14,7 @@ permissions:
 
 env:
   IMAGE_REPO: templeincloud/python-app
-  VALUES_FILE: charts/values.yaml
+  VALUES_FILE: charts/python-app/values.yaml
   APP_NAME: python-app
   ARGO_NAMESPACE: aargocd
   ARGO_SERVER: argocd-server.aargocd.svc.cluster.local
