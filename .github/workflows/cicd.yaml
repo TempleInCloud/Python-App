@@ -4,8 +4,8 @@ on:
   push:
     paths:
       - "src/**"
-      - "charts/**"
       - ".github/workflows/cicd.yaml"
+      - "charts/**"
     branches:
       - main
 
@@ -58,13 +58,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Install yq
         shell: bash
         run: |
-          set -e
-          YQ_VERSION="v4.44.3"
-          curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          curl -sSL -o yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           chmod +x yq
           ./yq --version
 
@@ -72,53 +72,45 @@ jobs:
         shell: bash
         run: |
           set -e
-          NEW_TAG="${{ needs.ci.outputs.commit_id }}"
-          echo "Updating $VALUES_FILE -> $YQ_PATH = $NEW_TAG"
-          ./yq -i "${YQ_PATH} = \"${NEW_TAG}\"" "${VALUES_FILE}"
-          echo "Updated file:"
-          cat "${VALUES_FILE}"
+          echo "Updating $VALUES_FILE => $YQ_PATH = ${{ needs.ci.outputs.commit_id }}"
+          ls -la charts charts/python-app || true
+          test -f "$VALUES_FILE"
+          ./yq -i "${YQ_PATH} = \"${{ needs.ci.outputs.commit_id }}\"" "$VALUES_FILE"
+          echo "Updated file content:"
+          cat "$VALUES_FILE"
 
       - name: Commit and push updated values.yaml
         shell: bash
         run: |
-          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "${VALUES_FILE}"
-          git commit -m "chore: update image tag to ${{ needs.ci.outputs.commit_id }}" || echo "No changes to commit"
+          git add "$VALUES_FILE"
+          git commit -m "chore: bump image tag to ${{ needs.ci.outputs.commit_id }}" || echo "No changes to commit"
           git push
 
       - name: Install ArgoCD CLI
         shell: bash
         run: |
-          set -e
-          curl -sSL -o argocd \
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x argocd
           ./argocd version --client
 
       - name: Get ArgoCD admin password from cluster
         shell: bash
         run: |
-          set -e
-          # this secret name matches what you showed: argocd-initial-admin-secret
-          PASS=$(kubectl -n "${ARGO_NAMESPACE}" get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 --decode)
-          echo "::add-mask::$PASS"
-          echo "ARGOCD_PASSWORD=$PASS" >> "$GITHUB_ENV"
+          echo "ARGOCD_PASSWORD=$(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)" >> $GITHUB_ENV
 
       - name: Login to ArgoCD
         shell: bash
         run: |
-          set -e
-          ./argocd login "${ARGO_SERVER}" \
+          ./argocd login "$ARGO_SERVER" \
             --grpc-web \
             --insecure \
             --username admin \
-            --password "${ARGOCD_PASSWORD}"
+            --password "$ARGOCD_PASSWORD"
 
       - name: Sync application
         shell: bash
         run: |
-          set -e
-          ./argocd app sync "${APP_NAME}"
-          ./argocd app wait "${APP_NAME}" --health --timeout 300
+          ./argocd app sync "$APP_NAME"
+          ./argocd app wait "$APP_NAME" --health --timeout 300
