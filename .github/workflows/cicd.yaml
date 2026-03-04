@@ -17,8 +17,7 @@ env:
   VALUES_FILE: charts/python-app/values.yaml
   APP_NAME: python-app
   ARGO_NAMESPACE: aargocd
-  ARGO_SERVER: argocd-server.aargocd.svc.cluster.local
-  YQ_PATH: ".image.tag"
+  ARGO_SERVER: argocd-server.aargocd.svc.cluster.local:443
 
 jobs:
   ci:
@@ -68,15 +67,19 @@ jobs:
           chmod +x yq
           ./yq --version
 
-      - name: Update charts values.yaml with new tag
+      - name: Update Helm values with new image tag
         shell: bash
         run: |
           set -e
-          echo "Updating $VALUES_FILE => $YQ_PATH = ${{ needs.ci.outputs.commit_id }}"
+          TAG="${{ needs.ci.outputs.commit_id }}"
+          echo "Updating $VALUES_FILE -> image.tag=$TAG"
+
           ls -la charts charts/python-app || true
           test -f "$VALUES_FILE"
-          ./yq -i "${YQ_PATH} = \"${{ needs.ci.outputs.commit_id }}\"" "$VALUES_FILE"
-          echo "Updated file content:"
+
+          ./yq -i ".image.tag = \"$TAG\"" "$VALUES_FILE"
+
+          echo "Updated values.yaml:"
           cat "$VALUES_FILE"
 
       - name: Commit and push updated values.yaml
@@ -84,8 +87,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git add "$VALUES_FILE"
-          git commit -m "chore: bump image tag to ${{ needs.ci.outputs.commit_id }}" || echo "No changes to commit"
+          git commit -m "chore: bump image tag to ${{ needs.ci.outputs.commit_id }} [skip ci]" || echo "No changes to commit"
           git push
 
       - name: Install ArgoCD CLI
@@ -95,13 +99,10 @@ jobs:
           chmod +x argocd
           ./argocd version --client
 
-      - name: Get ArgoCD admin password from cluster
-        shell: bash
-        run: |
-          echo "ARGOCD_PASSWORD=$(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)" >> $GITHUB_ENV
-
       - name: Login to ArgoCD
         shell: bash
+        env:
+          ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
         run: |
           ./argocd login "$ARGO_SERVER" \
             --grpc-web \
