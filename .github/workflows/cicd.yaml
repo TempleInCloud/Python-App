@@ -4,11 +4,23 @@ on:
   push:
     paths:
       - "src/**"
+      - "charts/**"
+      - ".github/workflows/cicd.yaml"
     branches:
       - main
 
+permissions:
+  contents: write
+
+env:
+  IMAGE_REPO: templeincloud/python-app
+  VALUES_FILE: charts/values.yaml
+  APP_NAME: python-app
+  ARGO_NAMESPACE: aargocd
+  ARGO_SERVER: argocd-server.aargocd.svc.cluster.local
+  YQ_PATH: ".image.tag"
+
 jobs:
-  jobs:
   ci:
     runs-on: ubuntu-latest
     outputs:
@@ -21,7 +33,8 @@ jobs:
       - name: Shorten commit id
         id: vars
         shell: bash
-        run: echo "commit_id=${GITHUB_SHA::6}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "commit_id=${GITHUB_SHA::6}" >> "$GITHUB_OUTPUT"
 
       - name: Debug commit id
         run: echo "COMMIT_ID is ${{ steps.vars.outputs.commit_id }}"
@@ -36,90 +49,76 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: templeincloud/python-app:${{ steps.vars.outputs.commit_id }}
+          tags: ${{ env.IMAGE_REPO }}:${{ steps.vars.outputs.commit_id }}
 
   cd:
-  needs: ci
-  runs-on: self-hosted
+    needs: ci
+    runs-on: self-hosted
 
-  # Needed so GITHUB_TOKEN can push commits back
-  permissions:
-    contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  env:
-    APP_NAME: python-app
-    VALUES_FILE: charts/python-app/values.yaml
-    ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER || 'argocd-server.aargocd.svc.cluster.local:443' }}
+      - name: Install yq
+        shell: bash
+        run: |
+          set -e
+          YQ_VERSION="v4.44.3"
+          curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          chmod +x yq
+          ./yq --version
 
-  steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Update charts values.yaml with new tag
+        shell: bash
+        run: |
+          set -e
+          NEW_TAG="${{ needs.ci.outputs.commit_id }}"
+          echo "Updating $VALUES_FILE -> $YQ_PATH = $NEW_TAG"
+          ./yq -i "${YQ_PATH} = \"${NEW_TAG}\"" "${VALUES_FILE}"
+          echo "Updated file:"
+          cat "${VALUES_FILE}"
 
-    - name: Prepare vars
-      shell: bash
-      run: |
-        echo "TAG=${{ needs.ci.outputs.commit_id }}" >> $GITHUB_ENV
-        echo "Using tag: ${{ needs.ci.outputs.commit_id }}"
+      - name: Commit and push updated values.yaml
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${VALUES_FILE}"
+          git commit -m "chore: update image tag to ${{ needs.ci.outputs.commit_id }}" || echo "No changes to commit"
+          git push
 
-    - name: Install yq
-      shell: bash
-      run: |
-        YQ_VERSION="v4.44.3"
-        curl -sSL -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-        chmod +x yq
-        ./yq --version
+      - name: Install ArgoCD CLI
+        shell: bash
+        run: |
+          set -e
+          curl -sSL -o argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          ./argocd version --client
 
-    - name: Update Helm values (image tag)
-      shell: bash
-      run: |
-        # Adjust the YAML path to match your values.yaml structure:
-        # Example assumes:
-        # image:
-        #   repository: templeincloud/python-app
-        #   tag: "xxxxxx"
-        ./yq -i '.image.tag = strenv(TAG)' "${VALUES_FILE}"
+      - name: Get ArgoCD admin password from cluster
+        shell: bash
+        run: |
+          set -e
+          # this secret name matches what you showed: argocd-initial-admin-secret
+          PASS=$(kubectl -n "${ARGO_NAMESPACE}" get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 --decode)
+          echo "::add-mask::$PASS"
+          echo "ARGOCD_PASSWORD=$PASS" >> "$GITHUB_ENV"
 
-        echo "Updated ${VALUES_FILE}:"
-        cat "${VALUES_FILE}"
+      - name: Login to ArgoCD
+        shell: bash
+        run: |
+          set -e
+          ./argocd login "${ARGO_SERVER}" \
+            --grpc-web \
+            --insecure \
+            --username admin \
+            --password "${ARGOCD_PASSWORD}"
 
-    - name: Commit and push values change
-      shell: bash
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-
-        git add "${VALUES_FILE}"
-
-        # If nothing changed, don't fail
-        if git diff --cached --quiet; then
-          echo "No changes to commit."
-          exit 0
-        fi
-
-        git commit -m "chore: bump image tag to ${TAG}"
-        git push origin main
-
-    - name: Install ArgoCD CLI
-      shell: bash
-      run: |
-        curl -sSL -o argocd "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64"
-        chmod +x argocd
-        ./argocd version --client
-
-    - name: Login to ArgoCD
-      shell: bash
-      run: |
-        ./argocd login "${ARGOCD_SERVER}" \
-          --insecure \
-          --grpc-web \
-          --username admin \
-          --password "${{ secrets.ARGOCD_PASSWORD }}"
-
-    - name: Sync application
-      shell: bash
-      run: |
-        ./argocd app sync "${APP_NAME}"
-        ./argocd app wait "${APP_NAME}" --health --timeout 300
-          
+      - name: Sync application
+        shell: bash
+        run: |
+          set -e
+          ./argocd app sync "${APP_NAME}"
+          ./argocd app wait "${APP_NAME}" --health --timeout 300
